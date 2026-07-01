@@ -41,7 +41,7 @@ export function VslTestPageContent() {
       >
         <h3>Self-Hosted VSL Player</h3>
         <p style={{ color: "#666", fontSize: 14, marginTop: 8 }}>
-          Rapid Engage Bar + exit overlay + timed CTA. Try pausing the video, or wait 10 seconds — the CTA is set to appear immediately for testing.
+          Rapid Engage Bar + exit overlay + timed CTA. Pause the video to see the exit overlay. The CTA appears in the last 10 seconds of the video.
         </p>
       </div>
 
@@ -57,9 +57,9 @@ export function VslTestPageContent() {
             cta={{
               text: "Започни трансформацията си сега",
               href: "#plans",
-              // showAtSec: 0 → visible immediately for testing.
-              // For production: set showBeforeEndSec: 10 to show 10s before the video ends.
-              showAtSec: 0,
+              // Appears in the last 10 seconds of the video — Vidalytics-style
+              // time-locked CTA aligned with the closing pitch.
+              showBeforeEndSec: 10,
             }}
           />
         </div>
@@ -123,7 +123,7 @@ export function VslTestPageContent() {
         <ul style={{ fontSize: 14, lineHeight: 2, color: "#333" }}>
           <li><strong>Rapid Engage Bar</strong> — progress bar starts fast, slows down. Video feels shorter early on.</li>
           <li><strong>Exit-pause overlay</strong> — pause the video → Bulgarian STOP image appears. Tap to resume.</li>
-          <li><strong>Timed CTA</strong> — the orange button anchor-scrolls to the #plans section above. Currently set to show immediately for testing.</li>
+          <li><strong>Timed CTA</strong> — the orange button anchor-scrolls to the #plans section above. Appears during the last 10 seconds of the video, aligned with the closing pitch.</li>
         </ul>
       </section>
     </div>
