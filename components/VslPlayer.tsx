@@ -987,8 +987,8 @@ export const VslPlayer = memo(function VslPlayer({
         >
           <Volume2 size={48} color="white" strokeWidth={1.5} />
           <div className="vsl-unmute-text">
-            <strong>Your Video Is Playing</strong>
-            <span>Click To Unmute</span>
+            <strong>Твоето видео вече започна</strong>
+            <span>Кликни за да гледаш</span>
           </div>
         </div>
       )}
