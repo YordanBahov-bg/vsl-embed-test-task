@@ -1157,12 +1157,22 @@ function ProgressBar({
       if (!video.duration || !Number.isFinite(video.duration)) return;
       const real = video.currentTime / video.duration;
 
-      // Rapid Engage curve: displayed = real^0.19
-      // At 30s of 19min video → displayed ≈ 50%
-      // At 3min → displayed ≈ 70%
-      // At 8min → displayed ≈ 85%
-      // At end → 100%
-      const displayed = rapidEngage ? Math.pow(real, 0.19) : real;
+      // Rapid Engage curve: displayed = sqrt(real)  (exponent 0.5)
+      //
+      // Research-backed sweet spot for perceived-progress curves (Kimura et al. 2022):
+      // the illusion must stay SUBTLE or users notice and lose trust.
+      //
+      // For a 19-min VSL:
+      //   real 0:30  → bar shows 16% (linear would show 3%)
+      //   real 1:00  → bar shows 23%
+      //   real 5:00  → bar shows 51% ("about halfway" feeling)
+      //   real 10:00 → bar shows 73%
+      //   real 15:00 → bar shows 89%
+      //   real end   → 100%
+      //
+      // Earlier we tried real^0.19 — at 30s that showed 50%, which broke immersion
+      // instantly (user checks bar, sees 50%, waits 30s, bar barely moved).
+      const displayed = rapidEngage ? Math.sqrt(real) : real;
       setProgress(displayed * 100);
     };
 
