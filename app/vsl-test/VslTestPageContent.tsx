@@ -2,12 +2,14 @@
 
 import { VslPlayer } from "@/components/VslPlayer";
 
-// Replace this with your actual Bunny.net HLS URL after uploading a test video
-const TEST_VIDEO_URL = "https://vz-bb034030-b38.b-cdn.net/16fe29ff-4dbe-4846-b536-618d8a8bc3de/playlist.m3u8";
+// Bunny.net HLS URL for the current test VSL.
+const VIDEO_LIBRARY = "vz-bb034030-b38";
+const VIDEO_UUID = "16fe29ff-4dbe-4846-b536-618d8a8bc3de";
+const TEST_VIDEO_URL = `https://${VIDEO_LIBRARY}.b-cdn.net/${VIDEO_UUID}/playlist.m3u8`;
+const POSTER_URL = `https://${VIDEO_LIBRARY}.b-cdn.net/${VIDEO_UUID}/thumbnail.jpg`;
 
-// Will be set after deploying the Cloudflare Worker — e.g. https://vsl-analytics.<sub>.workers.dev
+// Cloudflare Worker analytics endpoint
 const ANALYTICS_URL = "https://vsl-analytics.dndv.workers.dev";
-
 
 export function VslTestPageContent() {
   return (
@@ -39,8 +41,7 @@ export function VslTestPageContent() {
       >
         <h3>VSL Player Test Page</h3>
         <p style={{ color: "#666", fontSize: 14, marginTop: 8 }}>
-          This page tests the self-hosted VSL player. Replace the test video URL
-          with your Bunny.net HLS stream.
+          Self-hosted VSL player.
         </p>
       </div>
 
@@ -49,9 +50,9 @@ export function VslTestPageContent() {
         <div className="video-container">
           <VslPlayer
             src={TEST_VIDEO_URL}
-            videoId="e6212776-a0fb-4423-9f47-c4c077cd84cb"
+            videoId={VIDEO_UUID}
             analyticsUrl={ANALYTICS_URL || undefined}
-            poster="https://vz-8f003adf-6fd.b-cdn.net/e6212776-a0fb-4423-9f47-c4c077cd84cb/thumbnail.jpg"
+            poster={POSTER_URL}
           />
         </div>
       </section>

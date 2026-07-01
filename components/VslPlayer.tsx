@@ -8,21 +8,21 @@ import {
   memo,
   type RefObject,
 } from "react";
-import { 
-  Play, 
-  Pause, 
-  RotateCcw, 
-  Volume2, 
-  VolumeX, 
-  Settings, 
-  Maximize, 
-  SlidersHorizontal, 
-  FastForward, 
+import {
+  Play,
+  Pause,
+  RotateCcw,
+  Volume2,
+  VolumeX,
+  Settings,
+  Maximize,
+  SlidersHorizontal,
+  FastForward,
   ChevronRight,
   Minimize,
   ChevronLeft,
-  Check
-} from 'lucide-react';
+  Check,
+} from "./VslIcons";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -130,6 +130,8 @@ export const VslPlayer = memo(function VslPlayer({
   const [muted, setMuted] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [nativeHijacked, setNativeHijacked] = useState(false);
+  /** True while the player is still loading its first frame (skeleton overlay). */
+  const [showSkeleton, setShowSkeleton] = useState(true);
 
   // --- UI State ---
   const [showControls, setShowControls] = useState(false);
@@ -312,6 +314,16 @@ export const VslPlayer = memo(function VslPlayer({
 
   /* ================================================================ */
   /*  EFFECT: Initialize HLS or native playback                       */
+  /*                                                                  */
+  /*  Strategy:                                                       */
+  /*  - Safari: prefer NATIVE HLS. Safari's HLS pipeline is far       */
+  /*    faster than HLS.js on WebKit (measured: ~70s savings on       */
+  /*    Slow 3G). Trade-off: quality picker becomes cosmetic.         */
+  /*  - Chromium/Firefox: use HLS.js with tuned ABR config.           */
+  /*  - Speculative play(): call safePlay() from MANIFEST_PARSED      */
+  /*    so the browser queues play() before segment #0 arrives — this */
+  /*    eliminates the ~15s gap between first segment and playback    */
+  /*    that we measured.                                             */
   /* ================================================================ */
 
   useEffect(() => {
@@ -326,48 +338,128 @@ export const VslPlayer = memo(function VslPlayer({
     let destroyed = false;
     const isHlsSource = src.includes(".m3u8");
 
-    if (isHlsSource) {
+    // Restore resume position before source is set — cheaper than seeking after playback starts.
+    const savedPos = lsGet(RESUME_KEY_PREFIX + videoId);
+    let resumeSec = 0;
+    if (savedPos) {
+      const pos = parseFloat(savedPos);
+      if (pos > 0) resumeSec = pos;
+    }
+
+    if (isHlsSource && canPlayNativeHls()) {
+      // Safari path: native HLS is much faster than HLS.js on WebKit.
+      // ABR is fully controlled by the browser; the quality picker will
+      // fall back to `mockQuality` (Auto only).
+      video.src = src;
+      if (resumeSec > 0) {
+        const seekWhenReady = () => {
+          if (Number.isFinite(video.duration) && video.duration > 0 && resumeSec < video.duration - 2) {
+            video.currentTime = resumeSec;
+          }
+          video.removeEventListener("loadedmetadata", seekWhenReady);
+        };
+        video.addEventListener("loadedmetadata", seekWhenReady);
+      }
+      // Speculatively queue play() — Safari will honor it when readyState allows.
+      video.muted = true;
+      safePlay();
+    } else if (isHlsSource) {
+      // Chromium/Firefox path: HLS.js with tuned config for VSL VOD on cellular.
       import("hls.js")
         .then(({ default: Hls }) => {
           if (destroyed || !mountedRef.current) return;
-          if (Hls.isSupported()) {
-            const hls = new Hls({ startLevel: -1 });
-            hlsRef.current = hls;
+          if (!Hls.isSupported()) return;
 
-            hls.on(Hls.Events.MANIFEST_PARSED, (_: any, data: any) => {
-              if (!mountedRef.current) return;
-              const levels = data.levels
-                .map((l: any, idx: number) => {
-                  const shortEdge = Math.min(l.width || 0, l.height || 0) || Math.max(l.width || 0, l.height || 0);
-                  return { index: idx, shortEdge, height: l.height || 0 };
-                })
-                .sort((a: any, b: any) => b.height - a.height)
-                .map((l: any) => ({ index: l.index, name: l.shortEdge ? `${l.shortEdge}p` : `Level ${l.index}` }));
-              setQualities(levels);
-            });
+          const hls = new Hls({
+            // ---- Startup (every ms matters on Slow 3G) ----
+            startLevel: -1,                 // auto-pick; we constrain the ladder below
+            autoStartLoad: true,            // don't wait for external trigger
+            lowLatencyMode: false,          // VOD, not live
+            backBufferLength: 30,           // keep 30s behind for smooth seeks (default 90s wastes memory)
 
-            hls.on(Hls.Events.LEVEL_SWITCHED, (_: any, data: any) => {
-              if (!mountedRef.current) return;
-              if (hls.autoLevelEnabled) {
-                setCurrentQualityIndex(-1);
-              } else {
-                setCurrentQualityIndex(data.level);
-              }
-            });
+            // ---- ABR: err on the side of "start at the lowest, upgrade only when confident" ----
+            abrEwmaDefaultEstimate: 500_000,   // 500 kbps default (default is 2 Mbps — too optimistic for BG cellular)
+            abrEwmaFastVoD: 3.0,               // faster to move DOWN when connection worsens
+            abrEwmaSlowVoD: 9.0,               // slower to move UP (default 9)
+            abrBandWidthFactor: 0.95,          // use 95% of measured bandwidth
+            abrBandWidthUpFactor: 0.7,         // upgrade only if we have 30% headroom
+            capLevelToPlayerSize: true,        // 🔑 don't fetch 1080p for a 358px-wide player
+            capLevelOnFPSDrop: true,           // step down if we drop frames
 
-            hls.loadSource(src);
-            hls.attachMedia(video);
-          } else if (canPlayNativeHls()) {
-            video.src = src;
-          }
+            // ---- Buffering ----
+            maxBufferLength: 60,               // 60s ahead (default 30) — safer on spotty 4G
+            maxMaxBufferLength: 120,           // hard ceiling
+            maxBufferHole: 0.5,
+
+            // ---- Recovery timeouts sized for 400ms-RTT connections ----
+            manifestLoadingTimeOut: 20_000,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingTimeOut: 20_000,
+            levelLoadingMaxRetry: 4,
+            fragLoadingTimeOut: 30_000,
+            fragLoadingMaxRetry: 6,
+          });
+          hlsRef.current = hls;
+
+          hls.on(Hls.Events.MANIFEST_PARSED, (_: any, data: any) => {
+            if (!mountedRef.current) return;
+
+            // Populate the quality picker
+            const levels = data.levels
+              .map((l: any, idx: number) => {
+                const shortEdge = Math.min(l.width || 0, l.height || 0) || Math.max(l.width || 0, l.height || 0);
+                return { index: idx, shortEdge, height: l.height || 0 };
+              })
+              .sort((a: any, b: any) => b.height - a.height)
+              .map((l: any) => ({ index: l.index, name: l.shortEdge ? `${l.shortEdge}p` : `Level ${l.index}` }));
+            setQualities(levels);
+
+            // Resume position (if any) — set before speculative play()
+            if (resumeSec > 0 && Number.isFinite(video.duration) && video.duration > 0 && resumeSec < video.duration - 2) {
+              video.currentTime = resumeSec;
+            }
+
+            // Speculatively queue play() — the browser will honor it the instant
+            // the first sample is decoded. This is what Vidalytics does and it
+            // eliminates ~15s of dead time we measured between first segment and
+            // playing event.
+            video.muted = true;
+            safePlay();
+          });
+
+          hls.on(Hls.Events.LEVEL_SWITCHED, (_: any, data: any) => {
+            if (!mountedRef.current) return;
+            if (hls.autoLevelEnabled) {
+              setCurrentQualityIndex(-1);
+            } else {
+              setCurrentQualityIndex(data.level);
+            }
+          });
+
+          hls.loadSource(src);
+          hls.attachMedia(video);
         })
         .catch(() => {
           if (!destroyed && mountedRef.current && canPlayNativeHls()) {
             video.src = src;
+            video.muted = true;
+            safePlay();
           }
         });
     } else {
+      // Non-HLS (MP4 etc.) — just set src and go.
       video.src = src;
+      video.muted = true;
+      if (resumeSec > 0) {
+        const seekWhenReady = () => {
+          if (Number.isFinite(video.duration) && video.duration > 0 && resumeSec < video.duration - 2) {
+            video.currentTime = resumeSec;
+          }
+          video.removeEventListener("loadedmetadata", seekWhenReady);
+        };
+        video.addEventListener("loadedmetadata", seekWhenReady);
+      }
+      safePlay();
     }
 
     return () => {
@@ -378,10 +470,17 @@ export const VslPlayer = memo(function VslPlayer({
         hlsRef.current = null;
       }
     };
-  }, [src]);
+  }, [src, videoId, safePlay]);
 
   /* ================================================================ */
-  /*  EFFECT: Muted autoplay + resume position + fallback timeout     */
+  /*  EFFECT: Autoplay-blocked fallback timer                         */
+  /*                                                                  */
+  /*  The main HLS effect above calls safePlay() speculatively.       */
+  /*  If that's rejected (autoplay policy blocked us), we show the    */
+  /*  big play button so the user can start playback manually.        */
+  /*                                                                  */
+  /*  On Slow 3G, we allow a longer grace period before showing the   */
+  /*  button because the delay is network, not autoplay blocking.     */
   /* ================================================================ */
 
   useEffect(() => {
@@ -392,55 +491,37 @@ export const VslPlayer = memo(function VslPlayer({
 
     let autoplayFired = false;
 
-    const tryAutoplay = () => {
-      if (!mountedRef.current || autoplayFired) return;
-      autoplayFired = true;
-
-      const saved = lsGet(RESUME_KEY_PREFIX + videoId);
-      if (saved) {
-        const pos = parseFloat(saved);
-        if (
-          pos > 0 &&
-          Number.isFinite(video.duration) &&
-          video.duration > 0 &&
-          pos < video.duration - 2
-        ) {
-          video.currentTime = pos;
-        }
-      }
-
-      video.muted = true;
-      setMuted(true);
-      safePlay();
-    };
-
-    if (video.readyState >= 1) {
-      tryAutoplay();
-    } else {
-      video.addEventListener("loadedmetadata", tryAutoplay, { once: true });
-      video.addEventListener("canplay", tryAutoplay, { once: true });
-    }
+    const markFired = () => { autoplayFired = true; };
+    video.addEventListener("playing", markFired, { once: true });
 
     const fallbackTimer = setTimeout(() => {
       if (!mountedRef.current) return;
       if (!autoplayFired || (intendedPlayStateRef.current === "playing" && video.paused)) {
         setShowPlayButton(true);
       }
-    }, 4000);
+    }, 30_000); // give slow connections a chance before showing the manual play button
 
     const onError = () => {
       if (!mountedRef.current) return;
       setShowPlayButton(true);
+      setShowSkeleton(false);
     };
     video.addEventListener("error", onError);
 
+    // Hide the skeleton the moment we're actually playing
+    const onPlaying = () => {
+      if (!mountedRef.current) return;
+      setShowSkeleton(false);
+    };
+    video.addEventListener("playing", onPlaying);
+
     return () => {
       clearTimeout(fallbackTimer);
-      video.removeEventListener("loadedmetadata", tryAutoplay);
-      video.removeEventListener("canplay", tryAutoplay);
+      video.removeEventListener("playing", markFired);
+      video.removeEventListener("playing", onPlaying);
       video.removeEventListener("error", onError);
     };
-  }, [videoId, safePlay]);
+  }, [videoId]);
 
   /* ================================================================ */
   /*  EFFECT: Track max percent + throttled localStorage resume       */
@@ -737,7 +818,7 @@ export const VslPlayer = memo(function VslPlayer({
         autoPlay
         muted
         playsInline
-        preload="metadata"
+        preload="auto"
         poster={poster}
         className="vsl-video"
         style={{ objectFit: isFullscreen ? "contain" : "cover" }}
@@ -748,6 +829,12 @@ export const VslPlayer = memo(function VslPlayer({
         }}
         onMouseDown={(e) => e.preventDefault()}
       />
+
+      {showSkeleton && (
+        <div className="vsl-skeleton" aria-hidden="true">
+          <div className="vsl-skeleton-spinner" />
+        </div>
+      )}
 
       {muted && playing && !isFullscreen && (
         <div 
