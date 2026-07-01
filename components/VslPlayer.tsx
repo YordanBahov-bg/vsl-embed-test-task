@@ -962,7 +962,7 @@ export const VslPlayer = memo(function VslPlayer({
             setIsFullscreen(true);
           }}
         >
-          <img src={exitPauseImage} alt="Върни се и гледай видеото" />
+          <img src={exitPauseImage} alt="Пропускаш най-хубавото — върни се" />
         </div>
       )}
 
