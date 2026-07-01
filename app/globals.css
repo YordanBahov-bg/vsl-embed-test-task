@@ -126,6 +126,62 @@ a {
 
 /* ================= UI LAYER ================= */
 
+/* Exit-pause overlay — full-bleed image with baked-in Bulgarian CTA */
+.vsl-exit-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: #000;
+  cursor: pointer;
+  animation: vsl-exit-fade-in 0.25s ease-out;
+}
+.vsl-exit-overlay img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+@keyframes vsl-exit-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Timed CTA button — floats above the video, becomes visible at configured timestamp */
+.vsl-cta-button {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 68px;              /* sits above the controls bar with breathing room */
+  z-index: 25;
+  padding: 16px 20px;
+  background: linear-gradient(180deg, #ff6a00 0%, #e85500 100%);
+  color: white;
+  text-align: center;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  text-decoration: none;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(232, 85, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  animation: vsl-cta-slide-up 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.vsl-cta-button:active {
+  transform: scale(0.97);
+  box-shadow: 0 4px 16px rgba(232, 85, 0, 0.6), 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+.vsl-cta-button:hover {
+  filter: brightness(1.05);
+}
+@keyframes vsl-cta-slide-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 /* Unmute Overlay */
 .vsl-unmute-overlay {
   position: absolute;

@@ -33,6 +33,28 @@ interface VslPlayerProps {
   videoId: string;
   analyticsUrl?: string;
   poster?: string;
+  /**
+   * Exit-pause overlay — shown when the user manually pauses.
+   * Full-bleed image with baked-in Bulgarian "СТОП!" call-to-action.
+   * If undefined, no overlay is shown.
+   */
+  exitPauseImage?: string;
+  /**
+   * CTA button configuration (Vidalytics-style timed CTA).
+   * text: label displayed on the button.
+   * href: anchor (e.g. "#plans") or full URL. Anchors scroll smoothly.
+   * showAtSec: seconds into the video at which the CTA appears.
+   *   - Set to 0 for "always visible" (useful when testing / for shorter videos).
+   *   - Set to (duration - 10) programmatically for "10s before end" via updateShowAt.
+   * showBeforeEndSec: alternative — show N seconds before the video ends. Takes precedence
+   *   over showAtSec if defined.
+   */
+  cta?: {
+    text: string;
+    href: string;
+    showAtSec?: number;
+    showBeforeEndSec?: number;
+  };
 }
 
 type TapPhase = "preview" | "playing" | "paused";
@@ -98,6 +120,8 @@ export const VslPlayer = memo(function VslPlayer({
   videoId,
   analyticsUrl,
   poster,
+  exitPauseImage,
+  cta,
 }: VslPlayerProps) {
   /* ---- refs ---- */
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -132,6 +156,17 @@ export const VslPlayer = memo(function VslPlayer({
   const [nativeHijacked, setNativeHijacked] = useState(false);
   /** True while the player is still loading its first frame (skeleton overlay). */
   const [showSkeleton, setShowSkeleton] = useState(true);
+  /** True when the exit-pause overlay should be shown (user paused manually). */
+  const [showExitOverlay, setShowExitOverlay] = useState(false);
+  /** True when the timed CTA button should be shown. */
+  const [showCta, setShowCta] = useState(false);
+
+  /**
+   * Tracks whether the current pause was USER-initiated (via handleVideoClick
+   * or togglePlay), vs programmatic (tab switch, visibilitychange, etc).
+   * Only user-initiated pauses trigger the exit overlay.
+   */
+  const userPausedRef = useRef(false);
 
   // --- UI State ---
   const [showControls, setShowControls] = useState(false);
@@ -515,13 +550,25 @@ export const VslPlayer = memo(function VslPlayer({
     };
     video.addEventListener("playing", onPlaying);
 
+    // Exit-pause overlay: fires ONLY when the user manually paused.
+    // userPausedRef is set in handleVideoClick + togglePlay before safePause().
+    // Tab-visibility pauses don't set userPausedRef, so they won't show the overlay.
+    const onPause = () => {
+      if (!mountedRef.current || !exitPauseImage) return;
+      if (userPausedRef.current) {
+        setShowExitOverlay(true);
+      }
+    };
+    video.addEventListener("pause", onPause);
+
     return () => {
       clearTimeout(fallbackTimer);
       video.removeEventListener("playing", markFired);
       video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("pause", onPause);
       video.removeEventListener("error", onError);
     };
-  }, [videoId]);
+  }, [videoId, exitPauseImage]);
 
   /* ================================================================ */
   /*  EFFECT: Track max percent + throttled localStorage resume       */
@@ -549,6 +596,44 @@ export const VslPlayer = memo(function VslPlayer({
     video.addEventListener("timeupdate", onTimeUpdate);
     return () => video.removeEventListener("timeupdate", onTimeUpdate);
   }, [videoId]);
+
+  /* ================================================================ */
+  /*  EFFECT: Timed CTA — show button at configured timestamp         */
+  /* ================================================================ */
+
+  useEffect(() => {
+    if (!cta) return;
+
+    // Instant-show cases: no timing constraints (useful for testing).
+    const alwaysOn = cta.showAtSec === 0 && cta.showBeforeEndSec === undefined;
+    if (alwaysOn) {
+      setShowCta(true);
+      return;
+    }
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    const checkCta = () => {
+      if (!mountedRef.current) return;
+      const d = video.duration;
+      const t = video.currentTime;
+      const hasDuration = Number.isFinite(d) && d > 0;
+
+      // Priority: showBeforeEndSec if defined, otherwise showAtSec
+      if (hasDuration && typeof cta.showBeforeEndSec === "number") {
+        const threshold = d - cta.showBeforeEndSec;
+        setShowCta(t >= threshold);
+        return;
+      }
+      if (typeof cta.showAtSec === "number") {
+        setShowCta(t >= cta.showAtSec);
+      }
+    };
+
+    video.addEventListener("timeupdate", checkCta);
+    return () => video.removeEventListener("timeupdate", checkCta);
+  }, [cta]);
 
   /* ================================================================ */
   /*  EFFECT: Tab visibility — pause when hidden, resume on return    */
@@ -699,12 +784,15 @@ export const VslPlayer = memo(function VslPlayer({
       }
       case "playing": {
         tapPhaseRef.current = "paused";
+        userPausedRef.current = true; // user-initiated → will show exit overlay
         safePause();
         setIsFullscreen(false);
         break;
       }
       case "paused": {
         tapPhaseRef.current = "playing";
+        userPausedRef.current = false;
+        setShowExitOverlay(false); // dismiss the overlay on resume
         safePlay().then((ok) => {
           if (ok && mountedRef.current && tapPhaseRef.current === "playing") {
             setIsFullscreen(true);
@@ -744,10 +832,13 @@ export const VslPlayer = memo(function VslPlayer({
 
     if (video.paused || intendedPlayStateRef.current === "paused") {
       tapPhaseRef.current = "playing";
+      userPausedRef.current = false;
+      setShowExitOverlay(false);
       setIsFullscreen(true);
       safePlay();
     } else {
       tapPhaseRef.current = "paused";
+      userPausedRef.current = true; // user-initiated
       safePause();
       setIsFullscreen(false);
     }
@@ -771,6 +862,27 @@ export const VslPlayer = memo(function VslPlayer({
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((prev) => !prev);
   }, []);
+
+  const handleCtaClick = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>) => {
+      e.stopPropagation();
+      if (!cta) return;
+      // If it's an in-page anchor, exit fullscreen + smooth-scroll to it
+      if (cta.href.startsWith("#")) {
+        e.preventDefault();
+        setIsFullscreen(false);
+        // small delay so the fullscreen exit animation completes first
+        setTimeout(() => {
+          const target = document.getElementById(cta.href.slice(1));
+          if (target) {
+            target.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }, 100);
+      }
+      // Otherwise let the default <a> navigation happen
+    },
+    [cta],
+  );
 
   /* ================================================================ */
   /*  Render                                                           */
@@ -834,6 +946,35 @@ export const VslPlayer = memo(function VslPlayer({
         <div className="vsl-skeleton" aria-hidden="true">
           <div className="vsl-skeleton-spinner" />
         </div>
+      )}
+
+      {/* Exit-pause overlay — Vidalytics-style STOP image with baked-in Bulgarian text */}
+      {showExitOverlay && exitPauseImage && (
+        <div
+          className="vsl-exit-overlay"
+          onClick={(e) => {
+            e.stopPropagation();
+            // Tapping the overlay resumes the video (same as tapping the video)
+            userPausedRef.current = false;
+            setShowExitOverlay(false);
+            tapPhaseRef.current = "playing";
+            safePlay();
+            setIsFullscreen(true);
+          }}
+        >
+          <img src={exitPauseImage} alt="Върни се и гледай видеото" />
+        </div>
+      )}
+
+      {/* Timed CTA button — floats above the video, scrolls to #plans on click */}
+      {cta && showCta && (
+        <a
+          href={cta.href}
+          onClick={handleCtaClick}
+          className="vsl-cta-button"
+        >
+          {cta.text}
+        </a>
       )}
 
       {muted && playing && !isFullscreen && (
@@ -994,8 +1135,11 @@ export const VslPlayer = memo(function VslPlayer({
 
 function ProgressBar({
   videoRef,
+  rapidEngage = true,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** Rapid Engage Bar — displayed progress starts fast, slows down. Makes the video feel shorter early on. */
+  rapidEngage?: boolean;
 }) {
   const [progress, setProgress] = useState(0);
 
@@ -1004,23 +1148,27 @@ function ProgressBar({
     if (!video) return;
 
     const update = () => {
-      if (video.duration && Number.isFinite(video.duration)) {
-        setProgress((video.currentTime / video.duration) * 100);
-      }
+      if (!video.duration || !Number.isFinite(video.duration)) return;
+      const real = video.currentTime / video.duration;
+
+      // Rapid Engage curve: displayed = real^0.19
+      // At 30s of 19min video → displayed ≈ 50%
+      // At 3min → displayed ≈ 70%
+      // At 8min → displayed ≈ 85%
+      // At end → 100%
+      const displayed = rapidEngage ? Math.pow(real, 0.19) : real;
+      setProgress(displayed * 100);
     };
 
     video.addEventListener("timeupdate", update);
     return () => video.removeEventListener("timeupdate", update);
-  }, [videoRef]);
+  }, [videoRef, rapidEngage]);
 
+  // Seek is intentionally disabled (rapid engage curve makes seeking mathematically wrong,
+  // and VSL psychology depends on preventing skip-ahead)
   const handleSeek = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
-    const video = videoRef.current;
-    if (!video || !Number.isFinite(video.duration)) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    const pos = (e.clientX - rect.left) / rect.width;
-    video.currentTime = pos * video.duration;
-  }, [videoRef]);
+  }, []);
 
   return (
     <div 
