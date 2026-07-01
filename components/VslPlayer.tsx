@@ -993,9 +993,15 @@ export const VslPlayer = memo(function VslPlayer({
         </div>
       )}
 
-      <div className={`vsl-controls-container ${showControls || showSettings ? 'visible' : ''}`}>
+      {/* Rapid Engage Bar — always visible while playing (that's the point of the psychology).
+          Sits above the auto-hiding controls bar. */}
+      {playing && !showExitOverlay && (
+        <div className="vsl-progress-standalone">
           <ProgressBar videoRef={videoRef} />
+        </div>
+      )}
 
+      <div className={`vsl-controls-container ${showControls || showSettings ? 'visible' : ''}`}>
           <div className="vsl-controls-row">
             <div className="vsl-pill">
               <button className="vsl-btn control-btn" onClick={(e) => { e.stopPropagation(); togglePlay(); }}>
